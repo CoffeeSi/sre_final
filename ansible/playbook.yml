@@ -76,13 +76,13 @@
       changed_when: false
 
     - name: Delete existing Kind cluster (ensure clean state)
-      shell: kind delete cluster --name endterm-cluster 2>/dev/null || true
+      shell: kind delete cluster --name endterm-cluster 2>/dev/null || true 
       changed_when: false
 
     - name: Stop any running Docker Compose services
       shell: docker compose down 2>/dev/null || true
       args:
-        chdir: "/opt/sre-final"
+        chdir: "/opt/sre_final"
       changed_when: false
       failed_when: false
 
@@ -93,8 +93,8 @@
 
     - name: Clone repository and deploy stack
       git:
-        repo: 'https://github.com/CoffeeSi/sre-final.git'
-        dest: /opt/sre-final
+        repo: 'https://github.com/CoffeeSi/sre_final.git'
+        dest: /opt/sre_final
         force: yes
 
     - name: Create Kind cluster configuration file
@@ -124,17 +124,17 @@
               nodeRegistration:
                 kubeletExtraArgs:
                   node-labels: "ingress-ready=true"
-        dest: /opt/sre-final/kind-cluster-config.yaml
+        dest: /opt/sre_final/kind-cluster-config.yaml
 
     - name: Create Kind cluster with port forwarding configuration
-      shell: kind create cluster --name endterm-cluster --config /opt/sre-final/kind-cluster-config.yaml
+      shell: kind create cluster --name endterm-cluster --config /opt/sre_final/kind-cluster-config.yaml
       environment:
         KUBECONFIG: /root/.kube/config
 
     - name: Build local microservice images via Docker Compose
       shell: docker compose build
       args:
-        chdir: "/opt/sre-final"
+        chdir: "/opt/sre_final"
 
     - name: Load local images into Kind cluster
       shell: "kind load docker-image {{ item }}:latest --name endterm-cluster"
@@ -151,7 +151,7 @@
         KUBECONFIG: /root/.kube/config
 
     - name: Deploy application stack using Kubernetes manifests
-      shell: kubectl apply -f "/opt/sre-final/kubernetes/"
+      shell: kubectl apply -f "/opt/sre_final/kubernetes/"
       environment:
         KUBECONFIG: /root/.kube/config
   
@@ -163,7 +163,7 @@
 
     - name: Copy Prometheus configuration file to destination
       copy:
-        src: /opt/sre-final/prometheus/prometheus.yml
+        src: /opt/sre_final/prometheus/prometheus.yml
         dest: /etc/prometheus/prometheus.yml
         remote_src: yes
 
