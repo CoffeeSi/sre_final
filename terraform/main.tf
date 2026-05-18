@@ -1,0 +1,77 @@
+# main.tf
+provider "aws" {
+  region = var.aws_region
+  access_key = var.aws_access_key
+  secret_key = var.aws_secret_key
+}
+
+resource "aws_instance" "endterm_instance" {
+  ami           = var.ami_id
+  instance_type = var.instance_type
+  key_name = var.key_name
+  monitoring = var.enable_detailed_monitoring
+  vpc_security_group_ids = [
+    aws_security_group.main_sg.id,
+    ]
+
+  root_block_device {
+    volume_size = var.root_volume_size
+    volume_type = "gp3"
+  }
+
+  tags = {
+    Name = "EndtermInstance"
+  }
+}
+
+resource "aws_security_group" "main_sg" {
+  name        = "main_security_group"
+  description = "Allow SSH and HTTP access"
+
+  # SSH
+  ingress {
+    from_port   = var.port_ssh
+    to_port     = var.port_ssh
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP
+  ingress {
+    from_port   = var.port_http
+    to_port     = var.port_http
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Grafana
+  ingress {
+    from_port   = var.port_grafana
+    to_port     = var.port_grafana
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Prometheus
+  ingress {
+    from_port   = var.port_prometheus
+    to_port     = var.port_prometheus
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # API Gateway
+  ingress {
+    from_port   = var.port_api_gateway
+    to_port     = var.port_api_gateway
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] 
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}

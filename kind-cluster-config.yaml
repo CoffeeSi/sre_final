@@ -1,0 +1,28 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: endterm-cluster
+nodes:
+- role: control-plane
+  extraPortMappings:
+  # Frontend via NodePort
+  - containerPort: 30000
+    hostPort: 80
+    protocol: TCP
+  # API Gateway via NodePort
+  - containerPort: 30080
+    hostPort: 8080
+    protocol: TCP
+  # Prometheus via NodePort
+  - containerPort: 30900
+    hostPort: 9090
+    protocol: TCP
+  # Grafana via NodePort
+  - containerPort: 30300
+    hostPort: 3000
+    protocol: TCP
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"

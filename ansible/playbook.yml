@@ -1,0 +1,211 @@
+- name: SRE Endterm Infrastructure Setup
+  hosts: all
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait for SSH to become available
+      wait_for_connection:
+        timeout: 900
+        delay: 10
+        sleep: 10
+  tasks:
+    - name: Gather facts after the host is reachable
+      setup:
+
+    - name: Update apt cache and install prerequisite packages
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+          - python3-pip
+          - rsync
+        state: present
+        update_cache: yes
+
+    - name: Download Docker GPG key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker repository to apt sources
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker Engine components
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker service is running and enabled
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Download Kind binary
+      get_url:
+        url: https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        dest: /usr/local/bin/kind
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Download kubectl binary
+      get_url:
+        url: https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Check if Kind cluster already exists
+      shell: kind get clusters | grep -q "endterm-cluster"
+      register: cluster_check
+      failed_when: false
+      changed_when: false
+
+    - name: Delete existing Kind cluster (ensure clean state)
+      shell: kind delete cluster --name endterm-cluster 2>/dev/null || true
+      changed_when: false
+
+    - name: Stop any running Docker Compose services
+      shell: docker compose down 2>/dev/null || true
+      args:
+        chdir: "/opt/sre-endterm"
+      changed_when: false
+      failed_when: false
+
+    - name: Clean up Docker resources
+      shell: docker system prune -af --volumes 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: Clone repository and deploy stack
+      git:
+        repo: 'https://github.com/CoffeeSi/sre-final.git'
+        dest: /opt/sre-endterm
+        force: yes
+
+    - name: Create Kind cluster configuration file
+      copy:
+        content: |
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: endterm-cluster
+          nodes:
+          - role: control-plane
+            extraPortMappings:
+            - containerPort: 30000
+              hostPort: 80
+              protocol: TCP
+            - containerPort: 30080
+              hostPort: 8080
+              protocol: TCP
+            - containerPort: 30900
+              hostPort: 9090
+              protocol: TCP
+            - containerPort: 30300
+              hostPort: 3000
+              protocol: TCP
+            kubeadmConfigPatches:
+            - |
+              kind: InitConfiguration
+              nodeRegistration:
+                kubeletExtraArgs:
+                  node-labels: "ingress-ready=true"
+        dest: /opt/sre-endterm/kind-cluster-config.yaml
+
+    - name: Create Kind cluster with port forwarding configuration
+      shell: kind create cluster --name endterm-cluster --config /opt/sre-endterm/kind-cluster-config.yaml
+      environment:
+        KUBECONFIG: /root/.kube/config
+
+    - name: Build local microservice images via Docker Compose
+      shell: docker compose build
+      args:
+        chdir: "/opt/sre-endterm"
+
+    - name: Load local images into Kind cluster
+      shell: "kind load docker-image {{ item }}:latest --name endterm-cluster"
+      loop:
+        - auth-service
+        - user-service
+        - product-service
+        - order-service
+        - chat-service
+        - payment-service
+        - api-gateway
+        - frontend
+      environment:
+        KUBECONFIG: /root/.kube/config
+
+    - name: Deploy application stack using Kubernetes manifests
+      shell: kubectl apply -f "/opt/sre-endterm/kubernetes/"
+      environment:
+        KUBECONFIG: /root/.kube/config
+  
+    - name: Ensure Prometheus config directory exists on host
+      file:
+        path: /etc/prometheus
+        state: directory
+        mode: '0755'
+
+    - name: Copy Prometheus configuration file to destination
+      copy:
+        src: /opt/sre-endterm/prometheus/prometheus.yml
+        dest: /etc/prometheus/prometheus.yml
+        remote_src: yes
+
+    - name: Wait for all pods to be ready
+      shell: kubectl wait --for=condition=ready pod --all --namespace default --timeout=300s
+      environment:
+        KUBECONFIG: /root/.kube/config
+      failed_when: false
+
+    - name: Display service endpoints
+      shell: kubectl get svc -A
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: services_output
+
+    - name: Print services information
+      debug:
+        msg: "{{ services_output.stdout }}"
+
+    - name: Display port mappings
+      shell: |
+        echo "============================================"
+        echo "Frontend Service Details:"
+        kubectl get svc frontend -o wide
+        echo ""
+        echo "API Gateway Service Details:"
+        kubectl get svc api-gateway -o wide
+        echo ""
+        echo "All running pods:"
+        kubectl get pods -A
+        echo ""
+        echo "============================================"
+        echo "Expected Access Points:"
+        echo "Frontend:    http://<SERVER_IP>:80 (NodePort 30000)"
+        echo "API Gateway: http://<SERVER_IP>:8080 (NodePort 30080)"
+        echo "Prometheus:  http://<SERVER_IP>:9090 (NodePort 30900)"
+        echo "Grafana:     http://<SERVER_IP>:3000 (NodePort 30300)"
+        echo "============================================"
+      environment:
+        KUBECONFIG: /root/.kube/config
+      register: port_info
+
+    - name: Print port mapping information
+      debug:
+        msg: "{{ port_info.stdout }}"

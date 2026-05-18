@@ -1,0 +1,79 @@
+import os
+import sys
+from contextlib import asynccontextmanager
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from prometheus_client import Counter
+from prometheus_fastapi_instrumentator import Instrumentator
+from pythonjsonlogger import jsonlogger
+
+from app.infrastructure.database import close_pool, create_pool
+from app.interfaces.router import router
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql+asyncpg://user:password@postgres:5432/app_db"
+)
+ASYNC_PG_DSN = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await create_pool(app, ASYNC_PG_DSN)
+    yield
+    await close_pool(app)
+
+
+# Basic JSON logging setup
+def _setup_logging():
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = jsonlogger.JsonFormatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+_setup_logging()
+
+
+app = FastAPI(title="auth-service", version="1.0.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
+)
+
+
+# Prometheus metric: total HTTP requests handled by this service
+REQUEST_COUNT = Counter("auth_service_requests_total", "Total HTTP requests")
+
+
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next):
+    try:
+        REQUEST_COUNT.inc()
+    except Exception:
+        pass
+    response = await call_next(request)
+    return response
+
+
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "ok"})
+
+
+app.include_router(router)

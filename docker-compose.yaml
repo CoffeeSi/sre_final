@@ -1,0 +1,314 @@
+networks:
+  endterm_network:
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    networks:
+      - endterm_network
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d app_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "${POSTGRES_CPU_LIMIT:-1.0}"
+          memory: ${POSTGRES_MEMORY_LIMIT:-1G}
+        reservations:
+          cpus: "${POSTGRES_CPU_RESERVATION:-0.25}"
+          memory: ${POSTGRES_MEMORY_RESERVATION:-256M}
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - endterm_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-service:
+    image: auth-service
+    build: ./services/auth-service
+    restart: unless-stopped
+    deploy:
+      replicas: ${SERVICE_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://user:password@postgres:5432/app_db}
+      - SERVICE_PORT=8000
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_EXPIRE_HOURS=${JWT_EXPIRE_HOURS:-24}
+
+  user-service:
+    image: user-service
+    build: ./services/user-service
+    restart: unless-stopped
+    deploy:
+      replicas: ${SERVICE_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://user:password@postgres:5432/app_db}
+      - SERVICE_PORT=8001
+
+  product-service:
+    image: product-service
+    build: ./services/product-service
+    restart: unless-stopped
+    deploy:
+      replicas: ${SERVICE_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://user:password@postgres:5432/app_db}
+      - SERVICE_PORT=8002
+
+  order-service:
+    image: order-service
+    build: ./services/order-service
+    restart: unless-stopped
+    deploy:
+      endpoint_mode: vip
+      replicas: ${ORDER_SERVICE_REPLICAS:-5}
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: "${ORDER_SERVICE_CPU_LIMIT:-1.5}"
+          memory: ${ORDER_SERVICE_MEMORY_LIMIT:-1G}
+        reservations:
+          cpus: "${ORDER_SERVICE_CPU_RESERVATION:-0.5}"
+          memory: ${ORDER_SERVICE_MEMORY_RESERVATION:-256M}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://user:password@postgres:5432/app_db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - SERVICE_PORT=8003
+      - PRODUCT_SERVICE_URL=${PRODUCT_SERVICE_URL:-http://product-service:8002}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+
+  chat-service:
+    image: chat-service
+    build: ./services/chat-service
+    restart: unless-stopped
+    deploy:
+      replicas: ${SERVICE_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - SERVICE_PORT=8005
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+    depends_on:
+      - redis
+
+  payment-service:
+    image: payment-service
+    build: ./services/payment-service
+    restart: unless-stopped
+    deploy:
+      endpoint_mode: vip
+      replicas: ${PAYMENT_SERVICE_REPLICAS:-5}
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: "${PAYMENT_SERVICE_CPU_LIMIT:-1.5}"
+          memory: ${PAYMENT_SERVICE_MEMORY_LIMIT:-1G}
+        reservations:
+          cpus: "${PAYMENT_SERVICE_CPU_RESERVATION:-0.5}"
+          memory: ${PAYMENT_SERVICE_MEMORY_RESERVATION:-256M}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://user:password@postgres:5432/app_db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - SERVICE_PORT=8004
+      - PRODUCT_SERVICE_URL=${PRODUCT_SERVICE_URL:-http://product-service:8002}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+
+  api-gateway:
+    image: api-gateway
+    build: ./services/api-gateway
+    restart: unless-stopped
+    deploy:
+      endpoint_mode: vip
+      replicas: ${API_GATEWAY_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: "${API_GATEWAY_CPU_LIMIT:-1.0}"
+          memory: ${API_GATEWAY_MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: "${API_GATEWAY_CPU_RESERVATION:-0.25}"
+          memory: ${API_GATEWAY_MEMORY_RESERVATION:-128M}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-15s}
+    networks:
+      - endterm_network
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth-service
+      - user-service
+      - product-service
+      - order-service
+      - chat-service
+    environment:
+      - SERVICE_PORT=8080
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth-service:8000}
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-service:8001}
+      - PRODUCT_SERVICE_URL=${PRODUCT_SERVICE_URL:-http://product-service:8002}
+      - ORDER_SERVICE_URL=${ORDER_SERVICE_URL:-http://order-service:8003}
+      - PAYMENT_SERVICE_URL=${PAYMENT_SERVICE_URL:-http://payment-service:8004}
+      - CHAT_SERVICE_URL=${CHAT_SERVICE_URL:-http://chat-service:8005}
+
+  frontend:
+    image: frontend
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - endterm_network
+    environment:
+      - SERVICE_PORT=80
+      - VITE_HOST_IP=http://${INSTANCE_IP:-api-gateway}:8080
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: ${HEALTH_CHECK_INTERVAL:-10s}
+      timeout: ${HEALTH_CHECK_TIMEOUT:-5s}
+      retries: ${HEALTH_CHECK_RETRIES:-3}
+      start_period: ${HEALTH_CHECK_START_PERIOD:-30s}
+    deploy:
+      replicas: ${SERVICE_REPLICAS:-3}
+      update_config:
+        parallelism: 1
+        delay: 10s
+    
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    networks:
+      - endterm_network
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - auth-service
+      - user-service
+      - product-service
+      - order-service
+      - payment-service
+      - chat-service
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - endterm_network
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana/provisioning/dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:

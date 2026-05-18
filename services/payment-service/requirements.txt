@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+asyncpg
+aiohttp
+httpx
+PyJWT
+prometheus_client
+prometheus-fastapi-instrumentator
+python-json-logger
+redis
+sqlalchemy
+psycopg2-binary
+pydantic

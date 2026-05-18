@@ -1,0 +1,11 @@
+groups:
+  - name: sre-endterm-capacity
+    rules:
+      - alert: HighContainerRestartRate
+        expr: rate(container_start_time_seconds[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Containers are restarting"
+          description: "One or more containers appear to be restarting frequently."

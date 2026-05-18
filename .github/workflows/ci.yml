@@ -1,0 +1,81 @@
+name: CI/CD Final-project
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [auth-service, chat-service, order-service, payment-service, product-service, user-service, api-gateway]
+    env:
+      PYTHONPATH: ${{ github.workspace }}/services/${{ matrix.service }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest
+
+      - name: Run tests
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -m pytest -q
+
+  deploy:
+    name: Deploy via Ansible
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/assignment-aws.pem
+          chmod 600 ~/.ssh/assignment-aws.pem
+          ssh-keygen -y -f ~/.ssh/assignment-aws.pem > /dev/null
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config << 'EOF'
+          Host *
+            ServerAliveInterval 60
+            ServerAliveCountMax 30
+            ConnectTimeout 30
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Create Ansible inventory
+        run: |
+          cat > ansible/inventory.ini << EOF
+          [all]
+          ${{ secrets.SERVER_IP }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/assignment-aws.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=30'
+          EOF
+
+      - name: Run Ansible playbook
+        timeout-minutes: 60
+        run: |
+          ANSIBLE_SSH_RETRIES=5 \
+          ansible-playbook -i ansible/inventory.ini ansible/playbook.yml \
+            -e "ansible_command_timeout=3600"
